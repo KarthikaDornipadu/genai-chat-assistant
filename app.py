@@ -147,5 +147,6 @@ Do NOT hallucinate or make up answers not found in the Context.
         "retrievedChunks": retrieved_chunks_count
     })
 
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+if name == "main":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
