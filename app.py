@@ -5,7 +5,7 @@ import json
 import math
 
 # Configure Gemini API
-genai.configure(api_key="AIzaSyDPGDAq4UVcmjmRMLLqmkBn8LuKNcmwcak")
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = Flask(__name__)
 
