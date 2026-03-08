@@ -1,37 +1,31 @@
+
 import os
 import sys
 import json
 import math
 import time
 
-# Force unbuffered output
+# Guaranteed unbuffered logging
 def log(msg):
-    print(f"[APP LOG] {msg}", flush=True)
+    print(f"[BOOT] {msg}", flush=True)
 
-log(f"Initializing app on Python {sys.version}")
+log(f"Process started. Python: {sys.version}")
 
-from flask import Flask, request, jsonify, render_template
+try:
+    from flask import Flask, request, jsonify, render_template
+    import google.generativeai as genai
+    from dotenv import load_dotenv
+    load_dotenv()
+    log("Basic imports successful.")
+except Exception as e:
+    log(f"IMPORT ERROR: {e}")
+    import traceback
+    log(traceback.format_exc())
+    sys.exit(1)
 
-# 1. Initialize App First
 app = Flask(__name__)
 
-# 2. Lazy Import GenAI to prevent startup import crashes
-genai = None
-
-def get_genai():
-    global genai
-    if genai is None:
-        import google.generativeai as g
-        genai = g
-        api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            genai.configure(api_key=api_key)
-            log("Gemini API configured successfully.")
-        else:
-            log("CRITICAL: GEMINI_API_KEY is not set.")
-    return genai
-
-# 3. State
+# State
 DOCS_PATH = "docs.json"
 chunks = []
 chunk_embeddings = []
@@ -44,40 +38,50 @@ def cosine_similarity(v1, v2):
     if magnitude1 == 0 or magnitude2 == 0: return 0.0
     return dot_product / (magnitude1 * magnitude2)
 
-def load_docs_lazy():
+def load_knowledge_base():
     global chunks, chunk_embeddings
-    if chunks: return # Already loaded
-    
-    log("Loading knowledge base documents...")
+    log("Attempting to load knowledge base...")
     try:
         if not os.path.exists(DOCS_PATH):
-            log(f"Docs file {DOCS_PATH} missing.")
+            log(f"Notice: {DOCS_PATH} does not exist.")
             return
-            
+
         with open(DOCS_PATH, "r", encoding="utf-8") as f:
             docs = json.load(f)
+        
+        # Initialize Gemini for embedding
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            log("ABORT: GEMINI_API_KEY missing. Cannot embed docs.")
+            return
             
-        g = get_genai()
+        genai.configure(api_key=api_key)
+        
         for doc in docs:
             text = f"Title: {doc.get('title', '')}\nContent: {doc.get('content', '')}"
             chunks.append(text)
-            embedding = g.embed_content(
+            res = genai.embed_content(
                 model="models/gemini-embedding-001",
                 content=text,
                 task_type="retrieval_document"
-            )['embedding']
-            chunk_embeddings.append(embedding)
+            )
+            chunk_embeddings.append(res['embedding'])
         log(f"Knowledge base loaded: {len(chunks)} chunks.")
     except Exception as e:
-        log(f"Failed to load knowledge base: {e}")
+        log(f"KNOWLEDGE BASE ERROR: {e}")
+        import traceback
+        log(traceback.format_exc())
 
-# Routes
+# Lazy-load docs on first request if needed
+def ensure_docs_loaded():
+    if not chunks:
+        load_knowledge_base()
+
 @app.route("/health")
 def health():
     return jsonify({
-        "status": "online",
+        "status": "healthy", 
         "python": sys.version,
-        "key_set": bool(os.getenv("GEMINI_API_KEY")),
         "chunks": len(chunks)
     })
 
@@ -87,55 +91,62 @@ def home():
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    # Load docs on first request to avoid deployment timeout
-    load_docs_lazy()
+    ensure_docs_loaded()
     
-    data = request.json
+    data = request.json or {}
     message = data.get("message")
-    session_id = data.get("sessionId", "default-session")
-
+    session_id = data.get("sessionId", "default")
+    
     if not message:
-        return jsonify({"reply": "Please enter a message.", "tokensUsed": 0, "retrievedChunks": 0})
-
+        return jsonify({"reply": "Message missing."})
+        
     try:
-        g = get_genai()
-        # 1. Retrieval
-        query_emb = g.embed_content(
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return jsonify({"reply": "API Key is missing."})
+        genai.configure(api_key=api_key)
+        
+        # 1. Embed Query
+        res = genai.embed_content(
             model="models/gemini-embedding-001",
             content=message,
             task_type="retrieval_query"
-        )['embedding']
+        )
+        query_emb = res['embedding']
         
+        # 2. Similarity
         sims = [cosine_similarity(query_emb, emb) for emb in chunk_embeddings]
-        top_indices = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:3]
-        context = [chunks[i] for i in top_indices if sims[i] >= 0.65]
+        matches = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:3]
+        context = [chunks[i] for i in matches if sims[i] >= 0.65]
         
-        # 2. History
+        # 3. Chat
         if session_id not in conversation_history:
             conversation_history[session_id] = []
-        history = conversation_history[session_id][-6:]
+            
+        ctx_text = "\n\n".join(context) if context else "No direct info found."
+        prompt = f"Context: {ctx_text}\n\nUser: {message}\nAssistant:"
         
-        # 3. Prompt
-        ctx_text = "\n\n".join(context) if context else "No context found."
-        prompt = f"Context:\n{ctx_text}\n\nQuestion: {message}\nAssistant:"
-        
-        model = g.GenerativeModel("gemini-1.5-flash") # 1.5-flash is stable
+        model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         reply = response.text
-
+        
         conversation_history[session_id].append({"role": "user", "parts": [message]})
         conversation_history[session_id].append({"role": "model", "parts": [reply]})
-
+        
         return jsonify({
             "reply": reply,
-            "tokensUsed": getattr(response, 'usage_metadata', {}).get('total_token_count', 0),
-            "retrievedChunks": len(context)
+            "retrievedChunks": len(context),
+            "tokensUsed": getattr(response, 'usage_metadata', {}).get('total_token_count', 0)
         })
     except Exception as e:
-        log(f"Chat Error: {e}")
-        return jsonify({"reply": "Sorry, I encountered an error. Please try again.", "error": str(e)})
+        log(f"CHAT ERROR: {e}")
+        return jsonify({"reply": "Error occurred.", "debug": str(e)})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    log(f"Starting server on port {port}...")
-    app.run(host="0.0.0.0", port=port)
+    try:
+        port = int(os.environ.get("PORT", 10000))
+        log(f"Starting server on port {port}...")
+        app.run(host="0.0.0.0", port=port)
+    except Exception as e:
+        log(f"SERVER CRASH: {e}")
+        sys.exit(1)
