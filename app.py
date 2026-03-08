@@ -1,17 +1,19 @@
 import os
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # Loads .env for local development; no-op on Render
+except ImportError:
+    pass  # dotenv not installed (production env — vars set natively)
+
 from flask import Flask, request, jsonify, render_template
 import google.generativeai as genai
 import json
 import math
 
-# Load environment variables from .env file (local dev only; Render sets them natively)
-load_dotenv()
-
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-app = Flask(__name__)
+
 
 # --- RAG Setup ---
 DOCS_PATH = "docs.json"
