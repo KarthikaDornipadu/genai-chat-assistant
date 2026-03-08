@@ -1,0 +1,36 @@
+[
+{
+"title":"Reset Password",
+"content":"Users can reset their password from settings and security section."
+},
+
+{
+"title":"Create Account",
+"content":"Users can create an account by clicking the sign up button and entering their personal information."
+},
+
+{
+"title":"Contact Support",
+"content":"Users can contact support by sending an email to support@example.com."
+},
+
+{
+"title":"Update Profile",
+"content":"Profile information such as name and profile picture can be updated from the profile settings page."
+},
+
+{
+"title":"Delete Account",
+"content":"Users can delete their account permanently from account settings."
+},
+
+{
+"title":"Change Email",
+"content":"Registered email address can be changed inside account settings."
+},
+
+{
+"title":"Security Settings",
+"content":"Users can enable two factor authentication for better security."
+}
+]
