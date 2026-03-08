@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: genai-chat-assistant
+    runtime: python
+    pythonVersion: "3.11.9"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+    plan: free
