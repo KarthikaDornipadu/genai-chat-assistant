@@ -13,15 +13,15 @@ import math
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-
-
-# --- RAG Setup ---
+# --- RAG Setup (Logic moved to main block for better Render debugging) ---
 DOCS_PATH = "docs.json"
 chunks = []
 chunk_embeddings = []
-conversation_history = {} # Maps sessionId to a list of dicts: {"role": "user"/"model", "parts": ["text"]}
+conversation_history = {} 
 
 def generate_embedding(text, task_type="retrieval_document"):
+    if not os.getenv("GEMINI_API_KEY"):
+        raise ValueError("GEMINI_API_KEY is not set in environment variables")
     result = genai.embed_content(
         model="models/gemini-embedding-001",
         content=text,
@@ -29,31 +29,28 @@ def generate_embedding(text, task_type="retrieval_document"):
     )
     return result['embedding']
 
-def cosine_similarity(v1, v2):
-    dot_product = sum(a * b for a, b in zip(v1, v2))
-    magnitude1 = math.sqrt(sum(a * a for a in v1))
-    magnitude2 = math.sqrt(sum(b * b for b in v2))
-    if magnitude1 == 0 or magnitude2 == 0:
-        return 0.0
-    return dot_product / (magnitude1 * magnitude2)
-
 def load_and_embed_documents():
     global chunks, chunk_embeddings
+    print("Starting document embedding...", flush=True)
     try:
+        if not os.path.exists(DOCS_PATH):
+            print(f"Warning: {DOCS_PATH} not found. Skipping initial embedding.", flush=True)
+            return
+            
         with open(DOCS_PATH, "r", encoding="utf-8") as f:
             docs = json.load(f)
+            
         for doc in docs:
             chunk_text = f"Title: {doc.get('title', '')}\nContent: {doc.get('content', '')}"
             chunks.append(chunk_text)
             embedding = generate_embedding(chunk_text, task_type="retrieval_document")
             chunk_embeddings.append(embedding)
-        print(f"Loaded and embedded {len(chunks)} document chunks.")
+        print(f"Successfully loaded and embedded {len(chunks)} document chunks.", flush=True)
     except Exception as e:
-        print(f"Error loading or embedding docs: {e}")
+        print(f"Error during document embedding: {e}", flush=True)
+        print("Continuing startup without embeddings...", flush=True)
 
-# Call it on startup
-load_and_embed_documents()
-# -----------------
+# removed top-level call to load_and_embed_documents()
 
 @app.route("/")
 def home():
@@ -153,9 +150,22 @@ Do NOT hallucinate or make up answers not found in the Context.
         "retrievedChunks": retrieved_chunks_count
     })
 
+def cosine_similarity(v1, v2):
+    dot_product = sum(a * b for a, b in zip(v1, v2))
+    magnitude1 = math.sqrt(sum(a * a for a in v1))
+    magnitude2 = math.sqrt(sum(b * b for b in v2))
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0.0
+    return dot_product / (magnitude1 * magnitude2)
+
 if __name__ == "__main__":
     import sys
-    print(f"Python Version: {sys.version}")
-    print(f"GEMINI_API_KEY set: {'GEMINI_API_KEY' in os.environ}")
+    print(f"Python Version: {sys.version}", flush=True)
+    print(f"GEMINI_API_KEY set: {'GEMINI_API_KEY' in os.environ}", flush=True)
+    
+    # Load docs before starting server
+    load_and_embed_documents()
+    
     port = int(os.environ.get("PORT", 10000))
+    print(f"Starting server on port {port}...", flush=True)
     app.run(host="0.0.0.0", port=port)
