@@ -130,7 +130,7 @@ def chat():
         ctx_text = "\n\n".join(context) if context else "No relevant info found in documentation."
         prompt = f"Context: {ctx_text}\n\nUser: {message}\nAssistant:"
         
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         reply = response.text
         
