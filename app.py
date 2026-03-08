@@ -1,4 +1,12 @@
 import os
+import sys
+
+# Ensure logs are unbuffered for Render
+def log(msg):
+    print(msg, flush=True)
+
+log(f"Starting GenAI Chat Assistant on Python {sys.version}")
+
 try:
     from dotenv import load_dotenv
     load_dotenv()  # Loads .env for local development; no-op on Render
@@ -10,8 +18,11 @@ import google.generativeai as genai
 import json
 import math
 
-# Configure Gemini API
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+app = Flask(__name__)
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "healthy", "embeddings_loaded": len(chunk_embeddings) > 0})
 
 # --- RAG Setup (Logic moved to main block for better Render debugging) ---
 DOCS_PATH = "docs.json"
@@ -31,10 +42,10 @@ def generate_embedding(text, task_type="retrieval_document"):
 
 def load_and_embed_documents():
     global chunks, chunk_embeddings
-    print("Starting document embedding...", flush=True)
+    log("Starting document embedding...")
     try:
         if not os.path.exists(DOCS_PATH):
-            print(f"Warning: {DOCS_PATH} not found. Skipping initial embedding.", flush=True)
+            log(f"Warning: {DOCS_PATH} not found. Skipping initial embedding.")
             return
             
         with open(DOCS_PATH, "r", encoding="utf-8") as f:
@@ -45,12 +56,22 @@ def load_and_embed_documents():
             chunks.append(chunk_text)
             embedding = generate_embedding(chunk_text, task_type="retrieval_document")
             chunk_embeddings.append(embedding)
-        print(f"Successfully loaded and embedded {len(chunks)} document chunks.", flush=True)
+        log(f"Successfully loaded and embedded {len(chunks)} document chunks.")
     except Exception as e:
-        print(f"Error during document embedding: {e}", flush=True)
-        print("Continuing startup without embeddings...", flush=True)
+        log(f"Error during document embedding: {e}")
+        log("Continuing startup without embeddings...")
 
-# removed top-level call to load_and_embed_documents()
+# Configure GenAI and Load Docs
+try:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if api_key:
+        genai.configure(api_key=api_key)
+        log("Gemini API configured.")
+        load_and_embed_documents()
+    else:
+        log("WARNING: GEMINI_API_KEY not set. App will start but Gemini features will fail.")
+except Exception as e:
+    log(f"CRITICAL ERROR during GenAI configuration: {e}")
 
 @app.route("/")
 def home():
@@ -159,13 +180,6 @@ def cosine_similarity(v1, v2):
     return dot_product / (magnitude1 * magnitude2)
 
 if __name__ == "__main__":
-    import sys
-    print(f"Python Version: {sys.version}", flush=True)
-    print(f"GEMINI_API_KEY set: {'GEMINI_API_KEY' in os.environ}", flush=True)
-    
-    # Load docs before starting server
-    load_and_embed_documents()
-    
     port = int(os.environ.get("PORT", 10000))
-    print(f"Starting server on port {port}...", flush=True)
+    log(f"Starting local server on port {port}...")
     app.run(host="0.0.0.0", port=port)

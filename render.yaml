@@ -3,7 +3,7 @@ services:
     name: genai-chat-assistant
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: gunicorn app:app
     envVars:
       - key: GEMINI_API_KEY
         sync: false
