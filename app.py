@@ -1,8 +1,12 @@
 import os
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 import google.generativeai as genai
 import json
 import math
+
+# Load environment variables from .env file (local dev only; Render sets them natively)
+load_dotenv()
 
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
