@@ -140,7 +140,7 @@ def chat():
         return jsonify({
             "reply": reply,
             "retrievedChunks": len(context),
-            "tokensUsed": getattr(response, 'usage_metadata', {}).get('total_token_count', 0)
+            "tokensUsed": getattr(getattr(response, 'usage_metadata', None), 'total_token_count', 0)
         })
     except Exception as e:
         diag_log(f"RUNTIME CHAT ERROR: {e}")
