@@ -1,36 +1,41 @@
-
 import os
 import sys
 import json
 import math
 import time
 
-# Guaranteed unbuffered logging
-def log(msg):
-    print(f"[BOOT] {msg}", flush=True)
+# --- 0. FORCE UNBUFFERED LOGS ---
+# This ensures we see these messages in Render logs even on a crash
+sys.stdout.reconfigure(line_buffering=True)
 
-log(f"Process started. Python: {sys.version}")
+def diag_log(msg):
+    print(f"[RENDER-BOOT-DIAGNOSTIC] {msg}", flush=True)
+
+diag_log(f"Initializing Chat Assistant... Python: {sys.version}")
 
 try:
     from flask import Flask, request, jsonify, render_template
     import google.generativeai as genai
     from dotenv import load_dotenv
-    load_dotenv()
-    log("Basic imports successful.")
+    load_dotenv() # No-op if .env is missing
+    diag_log("Dependencies (Flask, GenAI) loaded successfully.")
 except Exception as e:
-    log(f"IMPORT ERROR: {e}")
+    diag_log(f"CRITICAL IMPORT ERROR: {e}")
     import traceback
-    log(traceback.format_exc())
+    diag_log(traceback.format_exc())
     sys.exit(1)
 
+# --- 1. INITIALIZE APP IMMEDIATELY ---
+# This is crucial so health checks can pass ASAP.
 app = Flask(__name__)
 
-# State
-DOCS_PATH = "docs.json"
+# --- 2. STATE ---
+DOCS_PATH = os.path.join(os.getcwd(), "docs.json")
 chunks = []
 chunk_embeddings = []
 conversation_history = {}
 
+# --- 3. LOGIC ---
 def cosine_similarity(v1, v2):
     dot_product = sum(a * b for a, b in zip(v1, v2))
     magnitude1 = math.sqrt(sum(a * a for a in v1))
@@ -38,21 +43,22 @@ def cosine_similarity(v1, v2):
     if magnitude1 == 0 or magnitude2 == 0: return 0.0
     return dot_product / (magnitude1 * magnitude2)
 
-def load_knowledge_base():
+def bootstrap_knowledge_base():
     global chunks, chunk_embeddings
-    log("Attempting to load knowledge base...")
+    if chunks: return # Only load once
+    
+    diag_log(f"Bootstrapping knowledge base from {DOCS_PATH}...")
     try:
         if not os.path.exists(DOCS_PATH):
-            log(f"Notice: {DOCS_PATH} does not exist.")
+            diag_log(f"Warning: {DOCS_PATH} missing. Continuing with empty KB.")
             return
 
         with open(DOCS_PATH, "r", encoding="utf-8") as f:
             docs = json.load(f)
         
-        # Initialize Gemini for embedding
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            log("ABORT: GEMINI_API_KEY missing. Cannot embed docs.")
+            diag_log("Warning: GEMINI_API_KEY not found. KB embedding skipped.")
             return
             
         genai.configure(api_key=api_key)
@@ -60,30 +66,27 @@ def load_knowledge_base():
         for doc in docs:
             text = f"Title: {doc.get('title', '')}\nContent: {doc.get('content', '')}"
             chunks.append(text)
+            # API call for embedding
             res = genai.embed_content(
                 model="models/gemini-embedding-001",
                 content=text,
                 task_type="retrieval_document"
             )
-            chunk_embeddings.append(res['embedding'])
-        log(f"Knowledge base loaded: {len(chunks)} chunks.")
+            # Adaptive result access (handles different SDK versions)
+            emb = res['embedding'] if isinstance(res, dict) else res.embedding
+            chunk_embeddings.append(emb)
+            
+        diag_log(f"Knowledge base ready: {len(chunks)} chunks loaded.")
     except Exception as e:
-        log(f"KNOWLEDGE BASE ERROR: {e}")
+        diag_log(f"KB INITIALIZATION ERROR: {e}")
         import traceback
-        log(traceback.format_exc())
+        diag_log(traceback.format_exc())
 
-# Lazy-load docs on first request if needed
-def ensure_docs_loaded():
-    if not chunks:
-        load_knowledge_base()
-
+# --- 4. ROUTES ---
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "healthy", 
-        "python": sys.version,
-        "chunks": len(chunks)
-    })
+    # Render health check
+    return jsonify({"status": "healthy", "python": sys.version, "kb_loaded": len(chunks) > 0})
 
 @app.route("/")
 def home():
@@ -91,39 +94,40 @@ def home():
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
-    ensure_docs_loaded()
+    # Load KB on the first real request to prevent startup delays
+    bootstrap_knowledge_base()
     
     data = request.json or {}
     message = data.get("message")
     session_id = data.get("sessionId", "default")
     
     if not message:
-        return jsonify({"reply": "Message missing."})
+        return jsonify({"reply": "Message is empty."})
         
     try:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            return jsonify({"reply": "API Key is missing."})
+            return jsonify({"reply": "API Key is not configured on server."})
         genai.configure(api_key=api_key)
         
-        # 1. Embed Query
+        # 1. Retrieval
         res = genai.embed_content(
             model="models/gemini-embedding-001",
             content=message,
             task_type="retrieval_query"
         )
-        query_emb = res['embedding']
+        q_emb = res['embedding'] if isinstance(res, dict) else res.embedding
         
-        # 2. Similarity
-        sims = [cosine_similarity(query_emb, emb) for emb in chunk_embeddings]
+        sims = [cosine_similarity(q_emb, emb) for emb in chunk_embeddings]
         matches = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:3]
         context = [chunks[i] for i in matches if sims[i] >= 0.65]
         
-        # 3. Chat
+        # 2. History
         if session_id not in conversation_history:
             conversation_history[session_id] = []
-            
-        ctx_text = "\n\n".join(context) if context else "No direct info found."
+        
+        # 3. Model
+        ctx_text = "\n\n".join(context) if context else "No relevant info found in documentation."
         prompt = f"Context: {ctx_text}\n\nUser: {message}\nAssistant:"
         
         model = genai.GenerativeModel("gemini-1.5-flash")
@@ -139,14 +143,13 @@ def chat():
             "tokensUsed": getattr(response, 'usage_metadata', {}).get('total_token_count', 0)
         })
     except Exception as e:
-        log(f"CHAT ERROR: {e}")
-        return jsonify({"reply": "Error occurred.", "debug": str(e)})
+        diag_log(f"RUNTIME CHAT ERROR: {e}")
+        return jsonify({"reply": "Oops! I hit a snag. Please try again.", "debug": str(e)})
 
+# --- 5. EXECUTION ---
 if __name__ == "__main__":
-    try:
-        port = int(os.environ.get("PORT", 10000))
-        log(f"Starting server on port {port}...")
-        app.run(host="0.0.0.0", port=port)
-    except Exception as e:
-        log(f"SERVER CRASH: {e}")
-        sys.exit(1)
+    # This block runs when executing 'python app.py' locally.
+    # On Render, gunicorn will ignore this and use the 'app' object directly.
+    port = int(os.environ.get("PORT", 10000))
+    diag_log(f"Starting development server on port {port}...")
+    app.run(host="0.0.0.0", port=port)
