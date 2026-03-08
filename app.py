@@ -5,7 +5,7 @@ import json
 import math
 
 # Configure Gemini API
-genai.configure(api_key="AIzaSyDPGDAq4UVcmjmRMLLqmkBn8LuKNcmwcak")
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = Flask(__name__)
 
@@ -148,4 +148,5 @@ Do NOT hallucinate or make up answers not found in the Context.
     })
 
 if __name__ == "__main__":
+
     app.run(debug=True, port=5000)
