@@ -149,8 +149,4 @@ Do NOT hallucinate or make up answers not found in the Context.
 
 if name == "main":
     port = int(os.environ.get("PORT", 10000))
-<<<<<<< HEAD
     app.run(host="0.0.0.0", port=port)
-=======
-    app.run(host="0.0.0.0", port=port)
->>>>>>> 4406caebecea75197df392f5fbaf38646d4a7242
